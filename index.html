@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quiz SENAI — Qual profissão combina com você?</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <span class="badge">SENAI</span>
+      <h1>Qual profissão combina com você?</h1>
+      <p class="subtitle">Descubra quais áreas podem combinar com seus interesses.</p>
+    </header>
+
+    <!-- Tela de login -->
+    <section id="login" class="card login-card">
+      <div class="login-icon">S</div>
+      <div>
+        <h2>Antes de começar</h2>
+        <p class="helper">Informe seus dados para iniciar o teste.</p>
+      </div>
+
+      <div class="field">
+        <label for="nome">Nome</label>
+        <input type="text" id="nome" placeholder="Digite seu nome" autocomplete="name">
+      </div>
+
+      <div class="field">
+        <label for="celular">Número de celular</label>
+        <input type="tel" id="celular" placeholder="(00) 00000-0000" maxlength="11" autocomplete="tel" inputmode="tel">
+      </div>
+
+      <div class="field">
+        <label for="instagram">Adicione seu Instagram <span>(opcional)</span></label>
+        <input type="text" id="instagram" placeholder="@seu_instagram" autocomplete="off" inputmode="text">
+      </div>
+
+      <p id="login-error" class="error" aria-live="polite"></p>
+      <button class="btn btn-login" id="login-btn">Continuar</button>
+      <p class="privacy-note">Seus dados e respostas são salvos pelo SENAI para este quiz.</p>
+    </section>
+
+    <!-- Tela inicial -->
+    <section id="intro" class="card hidden">
+      <div class="welcome">
+        <span class="welcome-label">Olá, <strong id="nome-aluno"></strong>!</span>
+        <h2>Vamos descobrir seu perfil?</h2>
+      </div>
+      <p>
+        Responda 15 perguntas marcando de <strong>1 (não gosto)</strong> a
+        <strong>5 (gosto muito)</strong>. No final, você verá quais cursos
+        técnicos têm maior afinidade com suas respostas.
+      </p>
+      <div class="areas" id="areas-list"></div>
+      <button class="btn" id="start">Começar o teste</button>
+    </section>
+
+    <!-- Tela de pergunta -->
+    <section id="quiz" class="card hidden">
+      <div class="topbar">
+        <span class="step" id="step"></span>
+        <span class="step">SENAI</span>
+      </div>
+      <div class="progress">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <p class="question" id="question"></p>
+      <p class="scale-hint">Escolha uma opção:</p>
+      <div class="scale" id="scale"></div>
+    </section>
+
+    <!-- Tela de resultado -->
+    <section id="result" class="card hidden">
+      <h2>Seu resultado</h2>
+      <div class="winner" id="winner"></div>
+      <div class="ranking-title">Afinidade com os cursos</div>
+      <div id="ranking"></div>
+      <div class="actions">
+        <button class="btn" id="ver-explicacao">Ver por que essa área combina</button>
+        <button class="btn" id="redo">Refazer o teste</button>
+      </div>
+    </section>
+
+    <!-- Tela de explicação do resultado -->
+    <section id="result-explanation" class="card hidden">
+      <h2>Por que essa área combina com você?</h2>
+      <div class="winner explanation-card" id="explanation"></div>
+      <div id="scores"></div>
+      <div class="actions">
+        <button class="btn" id="share-instagram">Compartilhar no Instagram</button>
+        <button class="btn" id="redo-explanation">Refazer o teste</button>
+      </div>
+    </section>
+  </main>
+
+  <img src="img/senai.png" alt="Logo SENAI" class="logo-senai">
+  <script src="java.js"></script>
+</body>
+</html>
