@@ -265,6 +265,25 @@ CREATE TABLE IF NOT EXISTS instagram_config (
 
 INSERT IGNORE INTO instagram_config (id) VALUES (1);
 
+-- Contas do Instagram que publicam (até 10). Quando uma atinge o limite do dia, a próxima da lista é usada.
+CREATE TABLE IF NOT EXISTS instagram_contas (
+  id                   INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  ordem                SMALLINT UNSIGNED NOT NULL DEFAULT 1,  -- ordem de uso (1 = primeira)
+  ativo                TINYINT(1)   NOT NULL DEFAULT 1,
+  usuario              VARCHAR(31)  NOT NULL,                 -- @ da conta, ex.: @senai.maravilha
+  ig_user_id           VARCHAR(40)  NULL,                     -- ID numérico da conta profissional
+  access_token         TEXT         NULL,                     -- token de acesso (nunca é mostrado no painel)
+  api_host             VARCHAR(40)  NOT NULL DEFAULT 'graph.instagram.com',
+  api_versao           VARCHAR(10)  NOT NULL DEFAULT 'v21.0',
+  limite_dia           SMALLINT UNSIGNED NOT NULL DEFAULT 100, -- máximo de Stories por 24 h nesta conta (a Meta permite 100)
+  bloqueada_ate        DATETIME     NULL,                     -- conta pulada até esta hora (limite atingido / token com problema)
+  ultimo_erro          VARCHAR(500) NULL,
+  token_atualizado_em  DATETIME     NULL,
+  criado_em            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_instagram_contas_usuario (usuario)
+) ENGINE=InnoDB;
+
 -- Resultados enviados pelos participantes para serem publicados nos Stories
 CREATE TABLE IF NOT EXISTS publicacoes (
   id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -278,7 +297,10 @@ CREATE TABLE IF NOT EXISTS publicacoes (
   criado_em         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   atualizado_em     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   publicado_em      DATETIME     NULL,
+  conta_id          INT UNSIGNED NULL,                       -- conta do Instagram que publicou
+  conta_usuario     VARCHAR(31)  NULL,                       -- @ dessa conta (fica guardado mesmo se a conta for removida)
   PRIMARY KEY (id),
+  KEY idx_publicacoes_conta (conta_id, status, publicado_em),
   UNIQUE KEY uq_publicacoes_tentativa (tentativa_id),
   KEY idx_publicacoes_status (status, criado_em),
   CONSTRAINT fk_publicacoes_tentativa FOREIGN KEY (tentativa_id) REFERENCES tentativas (id) ON DELETE CASCADE

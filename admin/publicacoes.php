@@ -102,7 +102,9 @@ cabecalho('Publicações');
     <a href="instagram.php">Instagram</a> para poder aprovar os itens abaixo.
   </div>
 <?php else: ?>
-  <p class="muted">Ao aprovar, o resultado sai nos Stories de <strong><?= h($cfg['usuario']) ?></strong> marcando o @ da pessoa.</p>
+  <p class="muted">Ao aprovar, o resultado sai nos Stories de
+    <strong><?= h(count($cfg['contas']) === 1 ? $cfg['contas'][0]['usuario'] : 'uma das ' . count($cfg['contas']) . ' contas cadastradas (a primeira que ainda não atingiu o limite do dia)') ?></strong>
+    marcando o @ da pessoa. <a href="instagram.php">Ver contas</a></p>
 <?php endif; ?>
 
 <nav class="abas" aria-label="Filtrar por situação">
@@ -150,6 +152,7 @@ cabecalho('Publicações');
         <?php if ($l['status'] === 'publicada'): ?>
           <p class="muted">
             Publicada em <?= h(date('d/m/Y H:i', strtotime((string) $l['publicado_em']))) ?>
+            <?= $l['conta_usuario'] ? 'por <strong>' . h($l['conta_usuario']) . '</strong>' : '' ?>
             <?= $l['marcou'] ? '· marcou ' . h($l['instagram_pessoa']) : '· <strong>sem marcação</strong> (o Instagram recusou o @)' ?>
           </p>
         <?php endif; ?>

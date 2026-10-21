@@ -961,8 +961,9 @@ document.addEventListener("DOMContentLoaded", function () {
             respostas: historico
         }, 1).then(function (json) {
             // O servidor informa se a escola publica nos Stories e de qual conta
-            if (json.instagram && json.instagram.ativo && json.instagram.conta) {
-                instagramEscola = { ativo: true, conta: json.instagram.conta };
+            if (json.instagram && json.instagram.ativo) {
+                // conta vazia = a escola tem várias contas e a que publica é escolhida na aprovação
+                instagramEscola = { ativo: true, conta: json.instagram.conta || "" };
             }
             return json.id;
         }).catch(function (erro) {
@@ -1124,7 +1125,9 @@ document.addEventListener("DOMContentLoaded", function () {
             ctx.fillText(instagram, 540, 1560);
         }
 
-        ctx.fillText(conta || CONTA_PADRAO, 540, 1640);
+        if (conta) {
+            ctx.fillText(conta, 540, 1640);
+        }
 
         ctx.font = "30px Arial";
         ctx.fillText("Descubra seu caminho profissional!", 540, 1715);
@@ -1158,7 +1161,7 @@ document.addEventListener("DOMContentLoaded", function () {
             : Promise.resolve();
 
         storyPromise = esperaServidor
-            .then(function () { return criarArquivoStory(vencedorChave, instagramDigitado(), instagramEscola.conta); })
+            .then(function () { return criarArquivoStory(vencedorChave, instagramDigitado(), instagramEscola.ativo ? instagramEscola.conta : CONTA_PADRAO); })
             .catch(function (erro) {
                 console.error("Não foi possível criar a imagem:", erro);
                 return null;
@@ -1207,7 +1210,7 @@ document.addEventListener("DOMContentLoaded", function () {
         var texto =
             "Meu resultado no teste de profissões foi " + vencedor.nome + "!\n\n" +
             "Possíveis profissões: " + (vencedor.profissoes || []).slice(0, 3).join(", ") + "\n\n" +
-            "Descubra qual área combina com você!\n" + instagramEscola.conta +
+            "Descubra qual área combina com você!" + (instagramEscola.ativo ? (instagramEscola.conta ? "\n" + instagramEscola.conta : "") : "\n" + CONTA_PADRAO) +
             (instagram ? "\n\nMeu Instagram: " + instagram : "");
 
         // Computador: abre a aba do Instagram já no clique (evita bloqueio de pop-up)
@@ -1282,7 +1285,8 @@ document.addEventListener("DOMContentLoaded", function () {
                 return;
             }
 
-            var conta = instagramEscola.conta;
+            // Com várias contas cadastradas, o servidor não informa qual vai publicar (é escolhida na aprovação)
+            var conta = instagramEscola.conta || "Instagram do SENAI";
             var jaTem = usuarioInstagramValido(instagramDigitado());
 
             var bloco = elementoDaExplicacao("publicar-ig", true);
@@ -1290,14 +1294,14 @@ document.addEventListener("DOMContentLoaded", function () {
             bloco.style.cssText = "margin:10px 0 4px;padding:12px;border:1px solid #d7dde3;border-radius:12px;text-align:left;";
             bloco.innerHTML =
                 "<div style=\"font-weight:800;margin-bottom:6px;\">Poste no Instagram do SENAI</div>" +
-                "<p style=\"font-size:.85rem;margin:0 0 8px;\">Seu resultado vai para os Stories de <strong>" + escaparHtml(conta) +
+                "<p style=\"font-size:.85rem;margin:0 0 8px;\">Seu resultado vai para os Stories " + (instagramEscola.conta ? "de " : "do ") + "<strong>" + escaparHtml(conta) +
                 "</strong> marcando o seu @.</p>" +
                 (jaTem ? "" :
                     "<input type=\"text\" id=\"ig-pessoa\" placeholder=\"Seu @ do Instagram (ex.: @maria)\" maxlength=\"31\" " +
                     "autocapitalize=\"none\" autocorrect=\"off\" style=\"width:100%;box-sizing:border-box;padding:10px;border:1px solid #c5ccd3;border-radius:8px;margin-bottom:8px;\">") +
                 "<label style=\"display:flex;gap:8px;align-items:flex-start;font-size:.8rem;margin-bottom:8px;\">" +
                 "<input type=\"checkbox\" id=\"ig-aceite\" style=\"margin-top:2px;\">" +
-                "<span>Autorizo o SENAI a publicar meu resultado e marcar meu @ em " + escaparHtml(conta) +
+                "<span>Autorizo o SENAI a publicar meu resultado e marcar meu @ no " + (instagramEscola.conta ? "Instagram " : "") + escaparHtml(conta) +
                 ". Se tenho menos de 18 anos, tenho autorização do meu responsável. Perfis privados não podem ser marcados.</span></label>" +
                 "<button type=\"button\" class=\"btn\" id=\"ig-postar\">Postar no Instagram do SENAI</button>" +
                 "<p id=\"ig-status\" aria-live=\"polite\" style=\"font-size:.85rem;margin:8px 0 0;\"></p>";
@@ -1366,9 +1370,9 @@ document.addEventListener("DOMContentLoaded", function () {
             aceite.disabled = true;
 
             if (json.status === "publicada") {
-                dizer("Já publicado nos Stories de " + json.conta + "!", false);
+                dizer("Já publicado nos Stories do SENAI!", false);
             } else {
-                dizer("Enviado! Depois que a equipe do SENAI aprovar, seu resultado aparece nos Stories de " + json.conta + " marcando " + pessoa + ".", false);
+                dizer("Enviado! Depois que a equipe do SENAI aprovar, seu resultado aparece nos Stories do SENAI" + (json.conta ? " (" + json.conta + ")" : "") + " marcando " + pessoa + ".", false);
             }
 
             botao.textContent = "Enviado";

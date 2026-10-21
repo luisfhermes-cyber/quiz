@@ -20,13 +20,26 @@ const IG_ALTURA = 1920;
 // Configuração
 // ---------------------------------------------------------------------
 
-/** Lê a configuração (linha única). Se a tabela ainda não existir, devolve tudo desligado. */
+/** Máximo de contas/tokens que podem ser cadastrados. */
+const IG_MAX_CONTAS = 10;
+
+/** Limite de publicações por conta a cada 24 h (regra da Meta: 100). */
+const IG_LIMITE_PADRAO = 100;
+
+/**
+ * Lê a configuração geral (linha única: liga/desliga e endereço do site) e as contas cadastradas.
+ * Se as tabelas ainda não existirem, devolve tudo desligado.
+ *
+ * Devolve também:
+ *   'contas'  => contas ligadas e completas (na ordem de uso)
+ *   'usuario' => o @ da conta, se houver só uma; vazio se houver várias (a que publica é escolhida na hora)
+ */
 function ig_config(PDO $pdo): array
 {
     $padrao = [
         'ativo' => 0, 'usuario' => '', 'ig_user_id' => '', 'access_token' => '',
         'api_host' => 'graph.instagram.com', 'api_versao' => 'v21.0',
-        'url_publica' => '', 'token_atualizado_em' => null,
+        'url_publica' => '', 'token_atualizado_em' => null, 'contas' => [],
     ];
 
     try {
@@ -35,27 +48,82 @@ function ig_config(PDO $pdo): array
         return $padrao;
     }
 
-    if (!$linha) {
-        return $padrao;
+    $cfg = $padrao;
+
+    if ($linha) {
+        $cfg['ativo'] = (int) $linha['ativo'];
+        $cfg['url_publica'] = (string) ($linha['url_publica'] ?? '');
     }
 
-    foreach ($linha as $chave => $valor) {
-        if ($valor === null) {
-            $linha[$chave] = $padrao[$chave] ?? '';
+    try {
+        $cfg['contas'] = array_values(array_filter(ig_contas($pdo), 'ig_conta_completa'));
+    } catch (Throwable $erro) {
+        $cfg['contas'] = [];
+    }
+
+    $cfg['usuario'] = count($cfg['contas']) === 1 ? $cfg['contas'][0]['usuario'] : '';
+
+    return $cfg;
+}
+
+/** Todas as contas cadastradas, na ordem de uso, com quantas publicações fizeram nas últimas 24 h. */
+function ig_contas(PDO $pdo, bool $apenasLigadas = true): array
+{
+    $sql = 'SELECT c.*,
+                   (SELECT COUNT(*) FROM publicacoes p
+                     WHERE p.conta_id = c.id AND p.status = \'publicada\'
+                       AND p.publicado_em >= (NOW() - INTERVAL 24 HOUR)) AS usadas_24h
+            FROM instagram_contas c ' . ($apenasLigadas ? 'WHERE c.ativo = 1 ' : '') . 'ORDER BY c.ordem, c.id';
+
+    $contas = $pdo->query($sql)->fetchAll();
+
+    foreach ($contas as &$c) {
+        foreach (['usuario', 'ig_user_id', 'access_token', 'ultimo_erro'] as $campo) {
+            $c[$campo] = (string) ($c[$campo] ?? '');
         }
     }
 
-    return $linha + $padrao;
+    return $contas;
 }
 
-/** A publicação só funciona se estiver ligada e com todos os dados. */
+function ig_conta_completa(array $c): bool
+{
+    return (int) $c['ativo'] === 1 && $c['usuario'] !== '' && $c['ig_user_id'] !== '' && $c['access_token'] !== '';
+}
+
+/** Situação da conta agora: 'disponivel', 'limite' (já publicou o máximo em 24 h), 'bloqueada' ou 'desligada'. */
+function ig_conta_situacao(array $c): string
+{
+    if (!ig_conta_completa($c)) {
+        return 'desligada';
+    }
+
+    if (!empty($c['bloqueada_ate']) && strtotime($c['bloqueada_ate']) > time()) {
+        return 'bloqueada';
+    }
+
+    if ((int) $c['usadas_24h'] >= (int) $c['limite_dia']) {
+        return 'limite';
+    }
+
+    return 'disponivel';
+}
+
+/** Junta a configuração geral com os dados de uma conta (formato que as funções de chamada esperam). */
+function ig_cfg_da_conta(array $cfg, array $conta): array
+{
+    return [
+        'usuario' => $conta['usuario'], 'ig_user_id' => $conta['ig_user_id'], 'access_token' => $conta['access_token'],
+        'api_host' => $conta['api_host'], 'api_versao' => $conta['api_versao'],
+    ] + $cfg;
+}
+
+/** A publicação só funciona se estiver ligada, com o endereço do site e ao menos uma conta completa. */
 function ig_pronto(array $cfg): bool
 {
     return (int) $cfg['ativo'] === 1
-        && $cfg['usuario'] !== ''
-        && $cfg['ig_user_id'] !== ''
-        && $cfg['access_token'] !== ''
-        && $cfg['url_publica'] !== '';
+        && $cfg['url_publica'] !== ''
+        && !empty($cfg['contas']);
 }
 
 /** Valida e normaliza um @ de Instagram. Devolve "@nome" ou null. */
@@ -145,6 +213,61 @@ function ig_erro_texto(array $resposta): string
     return 'Resposta inesperada do Instagram (HTTP ' . $resposta['http'] . ').';
 }
 
+/**
+ * O erro é da CONTA (limite de publicações, token vencido/sem permissão) e não da imagem?
+ * Nesse caso vale tentar a próxima conta cadastrada.
+ */
+function ig_erro_de_conta(array $resposta): bool
+{
+    if ($resposta['falha'] !== null) {
+        return false;
+    }
+
+    $erro = $resposta['json']['error'] ?? null;
+
+    if (is_array($erro)) {
+        $codigo = (int) ($erro['code'] ?? 0);
+        $sub = (int) ($erro['error_subcode'] ?? 0);
+        $texto = strtolower((string) ($erro['message'] ?? ''));
+
+        if (in_array($codigo, [4, 9, 10, 17, 32, 190, 200, 368, 613], true) || $sub === 2207051) {
+            return true;
+        }
+
+        return str_contains($texto, 'limit') || str_contains($texto, 'access token') || str_contains($texto, 'rate');
+    }
+
+    return in_array($resposta['http'], [401, 403, 429], true);
+}
+
+/** Token vencido/inválido (a conta precisa de um token novo, não basta esperar). */
+function ig_erro_de_token(array $resposta): bool
+{
+    $erro = $resposta['json']['error'] ?? null;
+
+    return is_array($erro) && ((int) ($erro['code'] ?? 0) === 190 || str_contains(strtolower((string) ($erro['message'] ?? '')), 'access token'));
+}
+
+/** Quanto a conta já publicou segundo o próprio Instagram: [usado, total] ou null se não deu para saber. */
+function ig_cota(array $cfg): ?array
+{
+    $r = ig_http('GET', ig_url($cfg, $cfg['ig_user_id'] . '/content_publishing_limit'), [
+        'fields' => 'quota_usage,config', 'access_token' => $cfg['access_token'],
+    ]);
+
+    if (!ig_ok($r) || empty($r['json']['data'][0])) {
+        return null;
+    }
+
+    $d = $r['json']['data'][0];
+
+    if (!isset($d['quota_usage'], $d['config']['quota_total'])) {
+        return null;
+    }
+
+    return [(int) $d['quota_usage'], (int) $d['config']['quota_total']];
+}
+
 function ig_ok(array $resposta): bool
 {
     return $resposta['falha'] === null
@@ -171,7 +294,7 @@ function ig_testar_conexao(array $cfg): array
     }
 
     if (!ig_ok($r)) {
-        return ['ok' => false, 'erro' => ig_erro_texto($r)];
+        return ['ok' => false, 'erro' => ig_erro_texto($r), 'conta' => ig_erro_de_conta($r), 'token' => ig_erro_de_token($r)];
     }
 
     return [
@@ -194,7 +317,7 @@ function ig_renovar_token(array $cfg): array
     ]);
 
     if (!ig_ok($r) || empty($r['json']['access_token'])) {
-        return ['ok' => false, 'erro' => ig_erro_texto($r)];
+        return ['ok' => false, 'erro' => ig_erro_texto($r), 'conta' => ig_erro_de_conta($r), 'token' => ig_erro_de_token($r)];
     }
 
     return ['ok' => true, 'token' => (string) $r['json']['access_token'], 'dias' => (int) round(((int) ($r['json']['expires_in'] ?? 0)) / 86400)];
@@ -238,12 +361,12 @@ function ig_publicar_story(array $cfg, string $urlImagem, ?string $usuarioMarcad
         $r = ig_http('POST', ig_url($cfg, $idConta . '/media'), $params);
 
         if (!ig_ok($r)) {
-            return ['ok' => false, 'erro' => $primeiroErro];
+            return ['ok' => false, 'erro' => $primeiroErro, 'conta' => ig_erro_de_conta($r), 'token' => ig_erro_de_token($r)];
         }
     }
 
     if (!ig_ok($r) || empty($r['json']['id'])) {
-        return ['ok' => false, 'erro' => ig_erro_texto($r)];
+        return ['ok' => false, 'erro' => ig_erro_texto($r), 'conta' => ig_erro_de_conta($r), 'token' => ig_erro_de_token($r)];
     }
 
     $container = (string) $r['json']['id'];
@@ -253,7 +376,7 @@ function ig_publicar_story(array $cfg, string $urlImagem, ?string $usuarioMarcad
         $s = ig_http('GET', ig_url($cfg, $container), ['fields' => 'status_code', 'access_token' => $cfg['access_token']]);
 
         if (!ig_ok($s)) {
-            return ['ok' => false, 'erro' => ig_erro_texto($s)];
+            return ['ok' => false, 'erro' => ig_erro_texto($s), 'conta' => ig_erro_de_conta($s), 'token' => ig_erro_de_token($s)];
         }
 
         $estado = (string) ($s['json']['status_code'] ?? '');
@@ -276,7 +399,7 @@ function ig_publicar_story(array $cfg, string $urlImagem, ?string $usuarioMarcad
     ]);
 
     if (!ig_ok($p) || empty($p['json']['id'])) {
-        return ['ok' => false, 'erro' => ig_erro_texto($p)];
+        return ['ok' => false, 'erro' => ig_erro_texto($p), 'conta' => ig_erro_de_conta($p), 'token' => ig_erro_de_token($p)];
     }
 
     return ['ok' => true, 'media_id' => (string) $p['json']['id'], 'marcou' => $marcou];
@@ -398,9 +521,66 @@ function ig_processar_publicacao(PDO $pdo, int $id): array
         return ['ok' => false, 'mensagem' => 'A imagem desta publicação não existe mais.'];
     }
 
-    @set_time_limit(90);
+    @set_time_limit(180);
 
-    $resultado = ig_publicar_story($cfg, ig_url_imagem($cfg, $pub['arquivo']), $pub['instagram_pessoa']);
+    $urlImagem = ig_url_imagem($cfg, $pub['arquivo']);
+    $resultado = null;
+    $conta = null;
+    $ultimoErro = '';
+    $puladas = [];
+
+    // Usa a primeira conta (na ordem cadastrada) que ainda não atingiu o limite; se falhar por causa da conta, passa para a próxima.
+    foreach (ig_contas($pdo) as $candidata) {
+        $situacao = ig_conta_situacao($candidata);
+
+        if ($situacao !== 'disponivel') {
+            if ($situacao !== 'desligada') {
+                $puladas[] = $candidata['usuario'] . ($situacao === 'limite' ? ' (limite do dia)' : ' (bloqueada)');
+            }
+
+            continue;
+        }
+
+        $cfgConta = ig_cfg_da_conta($cfg, $candidata);
+
+        // Confere com o próprio Instagram (o limite também conta posts feitos fora do quiz)
+        $cota = ig_cota($cfgConta);
+
+        if ($cota !== null && $cota[0] >= min($cota[1], (int) $candidata['limite_dia'])) {
+            ig_bloquear_conta($pdo, (int) $candidata['id'], 'Limite de publicações do Instagram atingido.', 3600);
+            $puladas[] = $candidata['usuario'] . ' (limite do dia)';
+            continue;
+        }
+
+        $r = ig_publicar_story($cfgConta, $urlImagem, $pub['instagram_pessoa']);
+
+        if ($r['ok']) {
+            $resultado = $r;
+            $conta = $candidata;
+            break;
+        }
+
+        $ultimoErro = $r['erro'];
+
+        if (empty($r['conta'])) {
+            // Problema da imagem/pedido: outra conta não resolve
+            $resultado = $r;
+            break;
+        }
+
+        ig_bloquear_conta($pdo, (int) $candidata['id'], $r['erro'], !empty($r['token']) ? 86400 : 3600);
+        $puladas[] = $candidata['usuario'] . (!empty($r['token']) ? ' (token com problema)' : ' (limite/erro da conta)');
+    }
+
+    if ($resultado === null) {
+        $msg = 'Nenhuma conta disponível agora' . ($puladas ? ': ' . implode(', ', $puladas) : '') . '.'
+            . ($ultimoErro !== '' ? ' Último erro: ' . $ultimoErro : '');
+
+        $pdo->prepare("UPDATE publicacoes SET status = 'erro', erro = ? WHERE id = ?")->execute([mb_substr($msg, 0, 500), $id]);
+        error_log('[quiz] publicação #' . $id . ' falhou: ' . $msg);
+
+        return ['ok' => false, 'mensagem' => $msg];
+    }
 
     if (!$resultado['ok']) {
         $pdo->prepare("UPDATE publicacoes SET status = 'erro', erro = ? WHERE id = ?")
@@ -412,17 +592,32 @@ function ig_processar_publicacao(PDO $pdo, int $id): array
     }
 
     $pdo->prepare(
-        "UPDATE publicacoes SET status = 'publicada', marcou = ?, ig_media_id = ?, erro = NULL, arquivo = NULL, publicado_em = NOW()
+        "UPDATE publicacoes SET status = 'publicada', marcou = ?, ig_media_id = ?, erro = NULL, arquivo = NULL,
+                publicado_em = NOW(), conta_id = ?, conta_usuario = ?
          WHERE id = ?"
-    )->execute([$resultado['marcou'] ? 1 : 0, $resultado['media_id'], $id]);
+    )->execute([$resultado['marcou'] ? 1 : 0, $resultado['media_id'], $conta['id'], $conta['usuario'], $id]);
+
+    // Publicou com sucesso: se a conta estava marcada com erro, libera
+    $pdo->prepare('UPDATE instagram_contas SET bloqueada_ate = NULL, ultimo_erro = NULL WHERE id = ?')->execute([$conta['id']]);
 
     // A imagem já está no Instagram: não precisa mais ficar no servidor (tem nome e @ da pessoa)
     ig_apagar_arquivo($pub['arquivo']);
 
     return [
         'ok'       => true,
-        'mensagem' => $resultado['marcou']
-            ? 'Publicado nos Stories marcando ' . $pub['instagram_pessoa'] . '.'
-            : 'Publicado nos Stories, mas SEM marcar ' . $pub['instagram_pessoa'] . ' (o Instagram recusou a marcação: o perfil precisa ser público e existir).',
+        'mensagem' => ($resultado['marcou']
+            ? 'Publicado nos Stories de ' . $conta['usuario'] . ' marcando ' . $pub['instagram_pessoa'] . '.'
+            : 'Publicado nos Stories de ' . $conta['usuario'] . ', mas SEM marcar ' . $pub['instagram_pessoa'] . ' (o Instagram recusou a marcação: o perfil precisa ser público e existir).')
+            . ($puladas ? ' Contas puladas: ' . implode(', ', $puladas) . '.' : ''),
     ];
+}
+
+/** Tira a conta de uso por um tempo (limite atingido ou problema no token) e guarda o motivo. */
+function ig_bloquear_conta(PDO $pdo, int $id, string $motivo, int $segundos): void
+{
+    $segundos = max(60, (int) $segundos);
+
+    $pdo->prepare(
+        'UPDATE instagram_contas SET bloqueada_ate = (NOW() + INTERVAL ' . $segundos . ' SECOND), ultimo_erro = :erro WHERE id = :id'
+    )->execute([':erro' => mb_substr($motivo, 0, 500), ':id' => $id]);
 }
